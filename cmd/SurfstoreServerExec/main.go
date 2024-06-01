@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cse224/proj4/pkg/surfstore"
 	"flag"
 	"fmt"
 	"io"
@@ -70,21 +71,30 @@ func main() {
 }
 
 func startServer(hostAddr string, serviceType string, blockStoreAddrs []string) error {
-	// Create a new Server
 	grpcServer := grpc.NewServer()
-
-	// Register rpc services
-	if serviceType != "block" {
-		panic("todo")
+	switch serviceType {
+	case "block":
+		blockStore := surfstore.NewBlockStore()
+		surfstore.RegisterBlockStoreServer(grpcServer, blockStore)
+	case "meta":
+		metaStore := surfstore.NewMetaStore(blockStoreAddrs)
+		surfstore.RegisterMetaStoreServer(grpcServer, metaStore)
+	case "both":
+		metaStore := surfstore.NewMetaStore(blockStoreAddrs)
+		surfstore.RegisterMetaStoreServer(grpcServer, metaStore)
+		blockStore := surfstore.NewBlockStore()
+		surfstore.RegisterBlockStoreServer(grpcServer, blockStore)
+	default:
+		panic("Invalid serviceType provided. Required meta or block or both...")
 	}
 
-	if serviceType != "meta" {
-		panic("todo")
+	listener, err := net.Listen("tcp", hostAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen: %v", err)
 	}
-
-	l, e := net.Listen("tcp", hostAddr)
-	if e != nil {
-		return e
+	err = grpcServer.Serve(listener)
+	if err != nil {
+		return fmt.Errorf("failed to serve: %v", err)
 	}
-	return grpcServer.Serve(l)
+	return nil
 }
