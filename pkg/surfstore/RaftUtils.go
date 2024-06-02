@@ -110,10 +110,12 @@ func (s *RaftSurfstore) checkStatus() error {
 // Upload difference between lastApplied and commitIndex to upload to metaStore
 func (s *RaftSurfstore) uploadToMetaStore(ctx context.Context) {
 	for i := s.lastApplied + 1; i <= s.commitIndex; i++ {
-		version, _ := s.metaStore.UpdateFile(ctx, s.log[i].FileMetaData)
-		// File has not been updated properly
-		if version.Version == -1 {
-			break
+		if s.log[i].FileMetaData != nil {
+			version, _ := s.metaStore.UpdateFile(ctx, s.log[i].FileMetaData)
+			// File has not been updated properly
+			if version.Version == -1 {
+				break
+			}
 		}
 		s.lastApplied++
 	}
@@ -132,7 +134,7 @@ func (s *RaftSurfstore) CreateAppendEntries(ctx context.Context, serverId int, n
 	}
 
 	if !noOp {
-		entries.Entries = s.log[entries.PrevLogIndex+1:]
+		entries.Entries = s.log[s.nextIndex[serverId]:]
 	}
 	entries.LeaderCommit = s.commitIndex
 }

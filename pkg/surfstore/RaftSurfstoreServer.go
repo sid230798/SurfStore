@@ -75,6 +75,7 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 	updateOperation := &UpdateOperation{Term: s.term, FileMetaData: filemeta}
 	s.log = append(s.log, updateOperation)
 	reqIndex := len(s.log) - 1
+	log.Printf("Update operation has been called on server %d with reqIndex %d", s.id, reqIndex)
 	s.raftStateMutex.RUnlock()
 
 	// Keep on trying till we apply this log index on state machine
@@ -96,8 +97,13 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 
 	// Now, we know majority has voted and this request has been applied to statemachine
 	// So, call getFileInfo map and return the version
-	fileInfoMap, _ := s.metaStore.GetFileInfoMap(ctx, &emptypb.Empty{})
-	return &Version{Version: fileInfoMap.FileInfoMap[filemeta.Filename].Version}, nil
+	if filemeta != nil {
+		fileInfoMap, _ := s.metaStore.GetFileInfoMap(ctx, &emptypb.Empty{})
+		return &Version{Version: fileInfoMap.FileInfoMap[filemeta.Filename].Version}, nil
+	} else {
+		// This represents the no-op log push
+		return &Version{Version: 0}, nil
+	}
 }
 
 // 1. Reply false if term < currentTerm (§5.1)
@@ -110,10 +116,10 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 // of last new entry)
 func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInput) (*AppendEntryOutput, error) {
 	serverStatus := s.checkStatus()
-	if serverStatus == ErrServerCrashed {
-		return &AppendEntryOutput{Term: s.term, ServerId: s.id, Success: false, MatchedIndex: -1}, ErrServerCrashed
+	if serverStatus == ErrServerCrashed || s.unreachableFrom[input.LeaderId] {
+		return &AppendEntryOutput{Term: s.term, ServerId: s.id, Success: false, MatchedIndex: -1}, ErrServerCrashedUnreachable
 	}
-
+	log.Printf("Got the append entries call for server %d with input as %s", s.id, input)
 	// Case 1: term < currentTerm
 	if input.Term < s.term {
 		return &AppendEntryOutput{Term: s.term, ServerId: s.id, Success: false, MatchedIndex: -1}, nil
@@ -137,6 +143,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 
 	// Case 3: Now check for prevLogIndex + 1, and delete entries with terms not matching
 	// Can directly copy but will implement in loopy way
+	// This also signifies loop invariant, if same index and same term it will have same value
 	if len(input.Entries) > 0 { // Can be a no_op operation
 		k := int(input.PrevLogIndex + 1)
 		for ; k < len(s.log); k++ {
@@ -186,7 +193,12 @@ func (s *RaftSurfstore) SetLeader(ctx context.Context, _ *emptypb.Empty) (*Succe
 	s.raftStateMutex.RUnlock()
 
 	// Send a no-op heartbeat to every other server
-	return s.SendHeartbeat(ctx, &emptypb.Empty{})
+	// Assuming, setLeader will be called at the time, when majority is up
+	_, err := s.UpdateFile(ctx, nil) // No-op push and wait till it commits
+	if err != nil {
+		return &Success{Flag: false}, err
+	}
+	return &Success{Flag: true}, nil
 }
 
 func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, noOp bool, peerResponses chan<- bool) {
@@ -205,20 +217,21 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, noOp b
 		s.raftStateMutex.RLock()
 		s.nextIndex[reply.ServerId] = reply.MatchedIndex + 1
 		s.matchIndex[reply.ServerId] = reply.MatchedIndex
-		peerResponses <- true
 		s.raftStateMutex.RUnlock()
+
+		peerResponses <- true
 	} else if reply.Term > s.term {
 		// Leader has changed, make this a follower
 		s.serverStatusMutex.RLock()
 		s.serverStatus = ServerStatus_FOLLOWER
-		peerResponses <- false
 		s.serverStatusMutex.RUnlock()
+		peerResponses <- false
 	} else {
 		// This will be the case where we need to keep reducing the index and resend the append entries
 		s.raftStateMutex.RLock()
 		s.nextIndex[reply.ServerId] -= 1
-		peerResponses <- false
 		s.raftStateMutex.RUnlock()
+		peerResponses <- false
 	}
 }
 
@@ -252,16 +265,20 @@ func (s *RaftSurfstore) SendPersistentHeartbeats(ctx context.Context, noOp bool)
 		}
 	}
 
+	if serverStatus := s.checkStatus(); serverStatus != nil {
+		return &Success{Flag: false}, serverStatus
+	}
+
 	s.raftStateMutex.RLock()
 	// set commitIndex, if logs match the current term then,
-	//If there exists an N such that N > commitIndex, a majority
-	//of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-	//set commitIndex = N (§5.3, §5.4).
+	// If there exists an N such that N > commitIndex, a majority
+	// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+	// set commitIndex = N (§5.3, §5.4).
 	for N := len(s.log) - 1; N > int(s.commitIndex); N-- {
 		if s.log[N].Term != s.term {
 			continue
 		}
-		cnt := 0
+		cnt := 1
 		for i := range s.matchIndex {
 			if s.matchIndex[i] >= int64(N) {
 				cnt++
@@ -276,14 +293,34 @@ func (s *RaftSurfstore) SendPersistentHeartbeats(ctx context.Context, noOp bool)
 	s.raftStateMutex.RUnlock()
 
 	// Check if majority servers are alive then
-	if serverStatus = s.checkStatus(); serverStatus == nil && numAliveServers > numServers/2 {
+	if numAliveServers > numServers/2 {
 		return &Success{Flag: true}, nil
 	} else {
-		return &Success{Flag: false}, serverStatus
+		return &Success{Flag: false}, nil
 	}
 }
 
 func (s *RaftSurfstore) SendHeartbeat(ctx context.Context, _ *emptypb.Empty) (*Success, error) {
+	serverStatus := s.checkStatus()
+	// Proceed only if leader
+	if serverStatus != nil {
+		return &Success{Flag: false}, serverStatus
+	}
+
+	// Keep on sending heartbeats till we get majority
+	for {
+		success, err := s.SendPersistentHeartbeats(ctx, false)
+		if success.Flag {
+			break
+		} else if err != nil {
+			return success, err
+		}
+	}
+
+	return &Success{Flag: true}, nil
+}
+
+func (s *RaftSurfstore) NoOpHeartbeat(ctx context.Context, _ *emptypb.Empty) (*Success, error) {
 	serverStatus := s.checkStatus()
 	// Proceed only if leader
 	if serverStatus != nil {

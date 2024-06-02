@@ -1,7 +1,7 @@
 package main
 
 import (
-	"cse224/proj4/pkg/surfstore"
+	"cse224/proj5/pkg/surfstore"
 	"flag"
 	"fmt"
 	"io"

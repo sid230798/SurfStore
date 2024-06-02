@@ -14,6 +14,7 @@ func TestSyncTwoClientsSameFileLeaderFailure(t *testing.T) {
 	cfgPath := "./config_files/3nodes.txt"
 	test := InitTest(cfgPath)
 	defer EndTest(test)
+
 	test.Clients[0].SetLeader(test.Context, &emptypb.Empty{})
 	test.Clients[0].SendHeartbeat(test.Context, &emptypb.Empty{})
 
@@ -44,9 +45,17 @@ func TestSyncTwoClientsSameFileLeaderFailure(t *testing.T) {
 		t.Fatalf("Sync failed")
 	}
 
+	state, _ := test.Clients[0].GetInternalState(test.Context, &emptypb.Empty{})
+	state2, _ := test.Clients[1].GetInternalState(test.Context, &emptypb.Empty{})
+	state3, _ := test.Clients[2].GetInternalState(test.Context, &emptypb.Empty{})
+	t.Logf("Internal state after sync %s", state)
+	t.Logf("Internal state after sync %s", state2)
+	t.Logf("Internal state after sync %s", state3)
+
 	test.Clients[0].SendHeartbeat(test.Context, &emptypb.Empty{})
 
 	test.Clients[0].Crash(test.Context, &emptypb.Empty{})
+
 	test.Clients[1].SetLeader(test.Context, &emptypb.Empty{})
 	test.Clients[1].SendHeartbeat(test.Context, &emptypb.Empty{})
 
@@ -112,9 +121,11 @@ func TestSyncTwoClientsSameFileLeaderFailure(t *testing.T) {
 	}
 
 	c, e = SameFile(workingDir+"/test1/multi_file1.txt", SRC_PATH+"/multi_file1.txt")
+
 	if e != nil {
 		t.Fatalf("Could not read files in client base dirs.")
 	}
+
 	if !c {
 		t.Fatalf("wrong file2 contents at client2")
 	}
