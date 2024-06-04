@@ -35,6 +35,11 @@ type RaftSurfstore struct {
 }
 
 func (s *RaftSurfstore) GetFileInfoMap(ctx context.Context, empty *emptypb.Empty) (*FileInfoMap, error) {
+	serverStatus := s.checkStatus()
+	if serverStatus != nil {
+		return nil, serverStatus
+	}
+
 	// Ensure that the majority of servers are up
 	success, err := s.SendHeartbeat(ctx, &emptypb.Empty{})
 	if !success.Flag || err != nil {
@@ -44,6 +49,11 @@ func (s *RaftSurfstore) GetFileInfoMap(ctx context.Context, empty *emptypb.Empty
 }
 
 func (s *RaftSurfstore) GetBlockStoreMap(ctx context.Context, hashes *BlockHashes) (*BlockStoreMap, error) {
+	serverStatus := s.checkStatus()
+	if serverStatus != nil {
+		return nil, serverStatus
+	}
+
 	// Ensure that the majority of servers are up
 	success, err := s.SendHeartbeat(ctx, &emptypb.Empty{})
 	if !success.Flag || err != nil {
@@ -54,6 +64,11 @@ func (s *RaftSurfstore) GetBlockStoreMap(ctx context.Context, hashes *BlockHashe
 }
 
 func (s *RaftSurfstore) GetBlockStoreAddrs(ctx context.Context, empty *emptypb.Empty) (*BlockStoreAddrs, error) {
+	serverStatus := s.checkStatus()
+	if serverStatus != nil {
+		return nil, serverStatus
+	}
+
 	// Ensure that the majority of servers are up
 	success, err := s.SendHeartbeat(ctx, &emptypb.Empty{})
 	if !success.Flag || err != nil {
@@ -119,7 +134,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 	if serverStatus == ErrServerCrashed || s.unreachableFrom[input.LeaderId] {
 		return &AppendEntryOutput{Term: s.term, ServerId: s.id, Success: false, MatchedIndex: -1}, ErrServerCrashedUnreachable
 	}
-	log.Printf("Got the append entries call for server %d with input as %s", s.id, input)
+	log.Printf("Got the append entries call for server %d with input as %v", s.id, input)
 	// Case 1: term < currentTerm
 	if input.Term < s.term {
 		return &AppendEntryOutput{Term: s.term, ServerId: s.id, Success: false, MatchedIndex: -1}, nil
@@ -347,7 +362,7 @@ func (s *RaftSurfstore) MakeServerUnreachableFrom(ctx context.Context, servers *
 	for _, serverId := range servers.ServerIds {
 		s.unreachableFrom[serverId] = true
 	}
-	log.Printf("Server %d is unreachable from", s.unreachableFrom)
+	log.Printf("Server %v is unreachable from", s.unreachableFrom)
 	s.raftStateMutex.Unlock()
 
 	return &Success{Flag: true}, nil
