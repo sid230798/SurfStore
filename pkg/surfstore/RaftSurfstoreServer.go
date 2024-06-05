@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"sync"
+	"time"
 
 	grpc "google.golang.org/grpc"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -108,6 +109,7 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 			break
 		}
 		s.raftStateMutex.RUnlock()
+		time.Sleep(150 * time.Millisecond)
 	}
 
 	// Now, we know majority has voted and this request has been applied to statemachine
@@ -330,6 +332,7 @@ func (s *RaftSurfstore) SendHeartbeat(ctx context.Context, _ *emptypb.Empty) (*S
 		} else if err != nil {
 			return success, err
 		}
+		time.Sleep(150 * time.Millisecond)
 	}
 
 	return &Success{Flag: true}, nil
