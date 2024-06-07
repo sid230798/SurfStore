@@ -97,12 +97,6 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 	// Keep on trying till we apply this log index on state machine
 	for {
 
-		// Check the status everytime and return if crashed or not leader
-		serverStatus := s.checkStatus()
-		if serverStatus != nil {
-			return nil, serverStatus
-		}
-
 		// Send append entries call
 		_, err := s.SendPersistentHeartbeats(ctx, false)
 		if err != nil {
@@ -325,15 +319,15 @@ func (s *RaftSurfstore) SendPersistentHeartbeats(ctx context.Context, noOp bool)
 }
 
 func (s *RaftSurfstore) SendHeartbeat(ctx context.Context, _ *emptypb.Empty) (*Success, error) {
+
+	serverStatus := s.checkStatus()
+	// Proceed only if leader
+	if serverStatus != nil {
+		return &Success{Flag: false}, serverStatus
+	}
+
 	// Keep on sending heartbeats till we get majority
 	for {
-
-		serverStatus := s.checkStatus()
-		// Proceed only if leader
-		if serverStatus != nil {
-			return &Success{Flag: false}, serverStatus
-		}
-
 		success, err := s.SendPersistentHeartbeats(ctx, false)
 		if success.Flag {
 			break
